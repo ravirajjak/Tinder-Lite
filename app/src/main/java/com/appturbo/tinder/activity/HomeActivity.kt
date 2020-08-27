@@ -4,7 +4,6 @@ import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import android.view.View
-import android.widget.Toast
 import androidx.databinding.DataBindingUtil
 import androidx.lifecycle.lifecycleScope
 import com.appturbo.tinder.R
@@ -47,21 +46,24 @@ class HomeActivity : BaseActivity(), CardStackListener {
 
     private fun setOnClickListener() {
         binding.incAppHeader.incAhFavourite.setOnClickListener {
-            openIntent(newInstance(MainActivity::class.java))
+            openIntent(newInstance(FavouriteActivity::class.java))
         }
     }
 
     private fun getData() {
 
+        showProgress()
         lifecycleScope.launch(Dispatchers.IO) {
             val mResponse = mApiService.getHomeData()
-            if (mResponse.isSuccessful) {
-                lifecycleScope.launch(Dispatchers.Main) {
+
+            lifecycleScope.launch(Dispatchers.Main) {
+                hideProgress()
+                if (mResponse.isSuccessful) {
                     val mHomePResponse = mResponse.body()
                     onSuccess(mHomePResponse?.results)
+                } else {
+                    Log.d(TAG, "Failure")
                 }
-            } else {
-                Log.d(TAG, "Failure")
             }
         }
     }

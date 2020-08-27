@@ -1,7 +1,6 @@
 package com.appturbo.tinder.activity
 
 import android.os.Bundle
-import android.util.Log
 import android.view.View
 import androidx.databinding.DataBindingUtil
 import com.appturbo.tinder.R
@@ -9,7 +8,7 @@ import com.appturbo.tinder.adapter.CardAdapter
 import com.appturbo.tinder.databinding.ActivityMainBinding
 import com.yuyakaido.android.cardstackview.CardStackLayoutManager
 
-class MainActivity : BaseActivity() {
+class FavouriteActivity : BaseActivity() {
     lateinit var binding: ActivityMainBinding
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
