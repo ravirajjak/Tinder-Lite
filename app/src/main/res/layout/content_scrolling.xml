@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layout>
+
+    <data>
+
+        <variable
+            name="result"
+            type="com.appturbo.tinder.repository.model.response.Result" />
+
+        <variable
+            name="utility"
+            type="com.appturbo.tinder.utility.Util" />
+    </data>
+
+    <androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+        xmlns:app="http://schemas.android.com/apk/res-auto"
+        xmlns:tools="http://schemas.android.com/tools"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/colorWhite"
+        android:fillViewport="true"
+        app:layout_behavior="@string/appbar_scrolling_view_behavior"
+        tools:context=".activity.ProfileActivity"
+        tools:showIn="@layout/activity_profile">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/cs_tv_name"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_margin="@dimen/text_margin"
+                android:drawableLeft="@drawable/ic_profile_outline"
+                android:drawablePadding="@dimen/margin_5"
+                android:fontFamily="@font/nunito_semi_bold"
+                android:text="@{utility.getFirstAndLast(result.user.name)}"
+                android:textColor="@color/colorBlack"
+                android:textSize="20sp" />
+
+            <TextView
+                android:id="@+id/cs_tv_dob"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_margin="@dimen/text_margin"
+                android:drawableLeft="@drawable/ic_calendar_outline"
+                android:drawablePadding="@dimen/margin_5"
+                android:fontFamily="@font/nunito_semi_bold"
+                android:text="@{result.user.dob}"
+                android:textColor="@color/colorBlack" />
+
+            <TextView
+                android:id="@+id/cs_tv_location"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_margin="@dimen/text_margin"
+                android:drawableLeft="@drawable/ic_map_outline"
+                android:drawablePadding="@dimen/margin_5"
+                android:fontFamily="@font/nunito_semi_bold"
+                android:text="@{utility.getLocation(result.user.location)}"
+                android:textColor="@color/colorBlack" />
+
+            <TextView
+                android:id="@+id/cs_tv_cell"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_margin="@dimen/text_margin"
+                android:drawableLeft="@drawable/ic_phone_outline"
+                android:drawablePadding="@dimen/margin_5"
+                android:fontFamily="@font/nunito_semi_bold"
+                android:text="@{result.user.phone}"
+                android:textColor="@color/colorBlack" />
+
+
+        </LinearLayout>
+
+
+    </androidx.core.widget.NestedScrollView>
+</layout>

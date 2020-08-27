@@ -1,0 +1,9 @@
+package com.netcore.android.inapp
+
+import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.Context
+import android.graphics.Color
+import android.graphics.drawable.ColorD
+# Project exclude paths
+/.gradle/

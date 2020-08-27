@@ -1,0 +1,400 @@
+package com.netcore.android.inapp
+
+import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.Context
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
+import android.os.Build
+import android.util.DisplayMetrics
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
+import android.webkit.WebView
+import android.widget.PopupWindow
+import androidx.annotation.VisibleForTesting
+import com.netcore.android.SMTEventParamKeys
+import com.netcore.android.Smartech
+import com.netcore.android.db.SMTDataBaseService
+import com.netcore.android.event.SMTEventId
+import com.netcore.android.event.SMTEventRecorder
+import com.netcore.android.event.SMTEventType
+import com.netcore.android.inapp.model.SMTInAppRule
+import com.netcore.android.logger.SMTLogger
+import com.netcore.android.network.models.SMTSdkInitializeResponse
+import com.netcore.android.preference.SMTPreferenceConstants
+import com.netcore.android.preference.SMTPreferenceHelper
+import com.netcore.android.utility.SMTCommonUtility
+import org.json.JSONObject
+import java.lang.ref.WeakReference
+import java.net.URL
+import java.util.*
+
+
+@Suppress("PrivatePropertyName")
+/**
+ * @author Netcore
+ * created on 8/03/2019
+ * @Description: Class which handles the InApp rule display
+ *
+ */
+internal class SMTInAppHandler private constructor() : SMTInAppRuleActionListener {
+
+
+    private val TAG = SMTInAppHandler::class.java.simpleName
+
+    private var mPopupWindow: PopupWindow? = null
+
+    private var isRecordInAppDismissEent = true
+
+    companion object {
+        @Volatile
+        private var instance: SMTInAppHandler? = null
+
+        @Synchronized
+        fun getInstance(): SMTInAppHandler =
+                SMTInAppHandler.instance ?: synchronized(SMTInAppHandler::class.java) {
+                    SMTInAppHandler.instance
+                            ?: SMTInAppHandler.buildInstance().also { SMTInAppHandler.instance = it }
+                }
+
+
+        private fun buildInstance(): SMTInAppHandler {
+            return SMTInAppHandler()
+        }
+    }
+
+    /**
+     * Check the event payload against the applicable inapp rule
+     * @param payloadMap payload of a event. System or custom event
+     */
+    fun checkRule(payloadMap: HashMap<String, Any>) {
+
+        if (isInAppOptIn()) {
+            /**
+             * If activity is in foreground then show the in app notifications
+             */
+            if (SMTInAppUtility.isAppInForeground()) {
+                val activity: Activity? = SMTInAppUtility.getForeGroundActivity() ?:
+                /**
+                 * current foreground activity is null. so returning here
+                 */
+                return
+
+                val inAppRules: MutableList<SMTInAppRule>? = getInAppRules(payloadMap, activity!!)
+                val identifiedRule = findARule(activity, inAppRules, payloadMap)
+                if (identifiedRule != null) {
+                    if (SMTCommonUtility.isNetworkAvailable(activity)) {
+                        showInAppRule(identifiedRule)
+                    } else {
+                        SMTLogger.internal(TAG, "Network is not available.")
+                    }
+                }
+
+
+            } else {
+                SMTLogger.e(TAG, "Application isn't in foreground so rejecting the InAPP request")
+            }
+        }
+    }
+
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    fun isInAppOptIn(): Boolean {
+        SMTInAppUtility.getForeGroundActivity()?.let {
+            return SMTPreferenceHelper.getAppPreferenceInstance(it.applicationContext, null).getBoolean(SMTPreferenceConstants.OPT_IN_OUT_IN_APP_MESSAGES, true)
+        }
+
+        return false
+    }
+
+    /**
+     * Get all the matching in app rules for the given event and for the current time
+     */
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    fun getInAppRules(eventPayLoad: HashMap<String, Any>, activity: Activity): MutableList<SMTInAppRule>? {
+        return SMTDataBaseService.getInstance(WeakReference(activity.applicationContext)).getInAppRules(eventPayLoad)
+    }
+
+    /**
+     * Find a rule which matches the criteria considering the filters and usage
+     */
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    fun findARule(context: Context, inAppRules: MutableList<SMTInAppRule>?, eventPayLoad: HashMap<String, Any>): SMTInAppRule? {
+
+        var matchedRule: SMTInAppRule? = null
+        if (inAppRules != null && inAppRules.size > 0) {
+            val listIterator = inAppRules.listIterator()
+            while (listIterator.hasNext()) {
+                val inAppRule = listIterator.next()
+                var isShowRule = false
+
+                // Save MID, CG and RandomValue in pref so we can send
+                // these value in other events
+                SMTPreferenceHelper.getAppPreferenceInstance(context, null).setString(SMTPreferenceConstants.SMT_MID, inAppRule.id)
+                SMTPreferenceHelper.getAppPreferenceInstance(context, null).setString(SMTPreferenceConstants.SMT_CG, if (inAppRule.controlGroup > inAppRule.randomNumber) "1" else "0")
+                SMTPreferenceHelper.getAppPreferenceInstance(context, null).setString(SMTPreferenceConstants.SMT_CG_RANDOM, inAppRule.randomNumber.toString())
+                SMTPreferenceHelper.getAppPreferenceInstance(context, null).setString(SMTPreferenceConstants.SMT_CG_RULE, inAppRule.controlGroup.toString())
+
+                //proceed with rule checking if the control group is less than randomNumber
+                if (inAppRule.randomNumber > inAppRule.controlGroup) {
+                    isShowRule = if (inAppRule.whomTo.everyone == "everyone") {
+
+                        //  Rule is for everyone no need to validate further on filter
+                        // and only check if the limit is reached or not
+                        true
+                    } else {
+                        //Rule is new  so lets validate the filters
+                        /**
+                         *  We are converting HashMap keys to lowercase to
+                         *  match with keys stored in the database to handle inapp display.
+                         */
+                        val objPayloadWithLowerKeys = SMTCommonUtility.jsonKeyCaseConverter(JSONObject(eventPayLoad), true)
+                        val modifiedEventPayLoad = SMTCommonUtility.jsonToHashMap(objPayloadWithLowerKeys)
+                        SMTInAppUtility.checkRuleFilter(inAppRule, modifiedEventPayLoad, true)
+                    }
+
+                    if (isShowRule) {
+                        isShowRule = checkTheUsage(inAppRule, isShowRule)
+                        if (isShowRule) {
+                            matchedRule = inAppRule
+                            break
+                        }
+                    }
+
+                } else {
+                    // Don't show  InApp but send InAppViewed event
+                    recordInAppEvent(SMTEventId.EVENT_INAPP_VIEWED, inAppRule)
+                }
+
+            }
+        }
+        return matchedRule
+    }
+
+
+    /**
+     * Method to check if matched rule still valid to show, considering its usage statics
+     * @param inAppRule Filter matched InAppRule object
+     */
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    fun checkTheUsage(inAppRule: SMTInAppRule, isShowInApp: Boolean): Boolean {
+        var isShow = isShowInApp
+        if (inAppRule.whenTo.frequencyType != null) {
+            when (inAppRule.whenTo.frequencyType) {
+                SMTInAppUtility.FREQUENCY_TYPE_DAY -> {
+                    if (SMTInAppUtility.isApplicableNow(inAppRule, Date())) {
+                        //Check if the usage is for today is over or not
+                        val currentDateTimeInMilli = SMTInAppUtility.getTodayInMilliSec()
+                        isShow = if (inAppRule.frequencyTypeValue!! == currentDateTimeInMilli) {
+                            isNotLimitReached(inAppRule)
+                        } else {
+                            // so the date has changed so don't compare the frequency directly show
+                            true
+
+                        }
+
+                    }
+                }
+                SMTInAppUtility.FREQUENCY_TYPE_SESSION -> {
+                    if (SMTInAppUtility.isCurrentTimeWithinTheRange(inAppRule, Date())) {
+                        isShow = isNotLimitReached(inAppRule)
+                    } else {
+                        isShow = false
+                    }
+                }
+                SMTInAppUtility.FREQUENCY_TYPE_CAMPAIGN -> {
+                    //if type is campaign then we need to just check if the usage is
+                    // less than the frequency because we already applied the from and to date filter
+                    // while querying the rules
+                    if (SMTInAppUtility.isCurrentTimeWithinTheRange(inAppRule, Date())) {
+                        isShow = isNotLimitReached(inAppRule)
+                    } else {
+                        isShow = false
+                    }
+                }
+                else -> {
+
+                    isShow = when (SMTInAppUtility.isCurrentTimeWithinTheRange(inAppRule, Date())) {
+                        true -> {
+                            isNotLimitReached(inAppRule)
+                        }
+
+                        false -> {
+                            false
+                        }
+                    }
+                }
+            }
+        }
+
+        return isShow
+
+    }
+
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    fun isNotLimitReached(inAppRule: SMTInAppRule): Boolean {
+        if (!inAppRule.whenTo.frequency.isNullOrEmpty()) {
+            return inAppRule.alreadyViewedCount < Integer.parseInt(inAppRule.whenTo.frequency!!)
+        }
+        return true
+    }
+
+
+    /**
+     * Show In app Rule
+     */
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    fun showInAppRule(identifiedRule: SMTInAppRule) {
+        SMTInAppUtility.getForeGroundActivity()?.runOnUiThread(kotlinx.coroutines.Runnable {
+            showInAppPopupWindow(identifiedRule)
+        })
+
+    }
+
+    /**
+     * Method to show the in app popup window using the selected in app rule
+     */
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    fun showInAppPopupWindow(identifiedRule: SMTInAppRule) {
+
+        //If there is already inapp rule is showing then dismiss the that and show the new one
+        if (mPopupWindow?.isShowing == true) {
+
+            mPopupWindow?.dismiss()
+        }
+
+        val webView = createWebView(identifiedRule)
+        if (webView != null) {
+
+            setJavaScriptInterface(webView, identifiedRule)
+            showPopUpWindow(identifiedRule, webView)
+        }
+
+    }
+
+    fun dismiss() {
+        mPopupWindow?.dismiss()
+        mPopupWindow = null
+    }
+
+    /**
+     * Method to create the PopupWindow instance using the rule and show it at the defined location
+     */
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    fun showPopUpWindow(identifiedRule: SMTInAppRule, webView: WebView) {
+
+
+        if (SMTInAppUtility.getForeGroundActivity() != null) {
+            val displayMetrics = DisplayMetrics()
+            SMTInAppUtility.getForeGroundActivity()?.windowManager!!.defaultDisplay.getMetrics(displayMetrics)
+            val height = displayMetrics.heightPixels
+            val width = displayMetrics.widthPixels
+
+            try {
+                when (Integer.parseInt(identifiedRule.whereTo)) {
+                    SMTInAppConstants.WhereTo.FULL_SCREEN.value -> {
+                        mPopupWindow = PopupWindow(webView, -1, -1, true)
+                        mPopupWindow!!.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                        mPopupWindow!!.showAtLocation(webView, Gravity.CENTER, 0, 0)
+
+                    }
+                    SMTInAppConstants.WhereTo.INTERSTITIAL.value -> {
+                        mPopupWindow = PopupWindow(webView, width - (width / 10), height - (height / 10), true)
+                        mPopupWindow!!.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                        mPopupWindow!!.showAtLocation(webView, Gravity.CENTER, 0, 0)
+
+                    }
+                    SMTInAppConstants.WhereTo.HALF_INTERSTIAL.value -> {
+                        mPopupWindow = PopupWindow(webView, width - (width / 10), height / 2, true)
+                        mPopupWindow!!.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                        mPopupWindow!!.showAtLocation(webView, Gravity.CENTER, 0, 0)
+
+                    }
+                    SMTInAppConstants.WhereTo.STICKY_HEADER.value -> {
+                        mPopupWindow = PopupWindow(webView, -1, height / 5, true)
+                        mPopupWindow!!.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                        mPopupWindow!!.showAtLocation(webView, Gravity.TOP, 0, 0)
+
+                    }
+                    SMTInAppConstants.WhereTo.STICKY_FOOTER.value -> {
+                        mPopupWindow = PopupWindow(webView, -1, height / 5, true)
+                        mPopupWindow!!.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                        mPopupWindow!!.showAtLocation(webView, Gravity.BOTTOM, 0, 0)
+
+                    }
+                    else -> {
+                        mPopupWindow = PopupWindow(webView, -1, height / 5, true)
+                        mPopupWindow!!.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                        mPopupWindow!!.showAtLocation(webView, Gravity.BOTTOM, 0, 0)
+
+                    }
+                }
+                mPopupWindow!!.setOnDismissListener {
+                    if (isRecordInAppDismissEent) {
+                        recordInAppEvent(SMTEventId.EVENT_INAPP_DISMISSED, identifiedRule)
+                    }
+                }
+
+                dimBehind(mPopupWindow!!, 0.2f)
+                updateUsageDetails(identifiedRule)
+                recordInAppEvent(SMTEventId.EVENT_INAPP_VIEWED, identifiedRule)
+
+            } catch (e: Exception) {
+                SMTLogger.e(TAG, "Inapp display issue.")
+            }
+        }
+
+    }
+
+    override fun recordInAppEvent(eventId: Int, inAppRule: SMTInAppRule, url: String?) {
+
+        SMTInAppUtility.getForeGroundActivity()?.let {
+
+            val payloadMap = hashMapOf<String, Any>()
+            payloadMap[SMTEventParamKeys.SMT_MID] = inAppRule.id
+            payloadMap[SMTEventParamKeys.SMT_CG] = if (inAppRule.controlGroup > inAppRule.randomNumber) {
+                "1"
+            } else {
+                "0"
+            }
+
+            when (eventId) {
+                SMTEventId.EVENT_INAPP_CLICKED -> {
+                    payloadMap[SMTEventParamKeys.SMT_IN_APP_CLICK_LINK] = url!!
+                }
+                SMTEventId.EVENT_INAPP_VIEWED -> {
+                    payloadMap[SMTEventParamKeys.SMT_CG_REPEAT] = if (inAppRule.alreadyViewedCount > 0) {
+                        1
+                    } else {
+                        0
+                    }
+                    payloadMap[SMTEventParamKeys.SMT_CG_CONTROL_GROUP] = inAppRule.controlGroup
+                    payloadMap[SMTEventParamKeys.SMT_CG_RANDOM_NO] = inAppRule.randomNumber
+                }
+                SMTEventId.EVENT_INAPP_DISMISSED -> {
+
+                }
+
+            }
+
+            SMTEventRecorder.getInstance(it.applicationContext).recordEvent(eventId, SMTEventId.getEventName(eventId), payloadMap, SMTEventType.EVENT_TYPE_SYSTEM)
+        }
+    }
+
+    /**
+     * Method to update the In App rules table. update the viewed count
+     */
+
+    private fun updateUsageDetails(inAppRule: SMTInAppRule) {
+
+        if (SMTInAppUtility.getForeGroundActivity() != null) {
+            SMTDataBaseService.getInstance(WeakReference(SMTInAppUtility.getForeGroundActivity()!!.applicationContext)).updateInAppRuleUsage(inAppRule, SMTInAppUtility.getTodayInMilliSec())
+        }
+
+    }
+
+    /**
+     * Function which sets the
+     */
+    private fun setJavaScriptInterface(webView: WebView, inAppRule: SMTInAppRule) {
+        if (SMTInA
